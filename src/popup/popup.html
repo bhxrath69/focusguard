@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FocusGuard</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+  <body>
+    <div class="terminal">
+      <div class="topbar">// WORK SESSION</div>
+
+      <div class="timer-wrap">
+        <div class="timer-digits" id="timeLeft">00:00</div>
+      </div>
+
+      <div class="buttons">
+        <button id="startBtn" class="terminal-btn">Start</button>
+        <button id="resetBtn" class="terminal-btn secondary">Reset</button>
+      </div>
+
+      <div class="allowlist-box">
+        <div class="allowlist-label">ALLOWED WEBSITES (COMMA-SEPARATED)</div>
+
+        <div class="allowlist-add-row">
+          <input
+            id="newWebsiteInput"
+            class="allowlist-input"
+            type="text"
+            placeholder="type a domain and press Enter"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button id="addWebsiteBtn" class="terminal-btn">Add</button>
+        </div>
+
+        <div class="procrastination-toggle-row">
+          <label class="toggle">
+            <input id="procrastinationToggle" type="checkbox" />
+            <span class="toggle-slider"></span>
+          </label>
+          <div class="toggle-text">PROCRASTINATION MONITOR</div>
+        </div>
+
+        <div id="allowedWebsitesList" class="allowed-list"></div>
+      </div>
+    </div>
+
+    <script type="module" src="./popup.js"></script>
+  </body>
+</html>
+
