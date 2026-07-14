@@ -2,8 +2,15 @@ import { createPomodoroEngine } from './pomodoroEngine.js';
 import { MESSAGE_TYPES } from '../shared/messages.js';
 import { getAllowlistFromStorage } from '../shared/allowlistStorage.js';
 import { createProcrastinationEngine, PROCRASTINATION_THRESHOLD_MS } from './procrastinationEngine.js';
+import {
+  appendPomodoroHistoryEntry,
+  getNextPomodoroHistoryCounter,
+  getPomodoroHistory,
+  getPomodoroHistoryEntrySortNewestFirst
+} from '../shared/historyStorage.js';
 
 const ALARM_NAME = 'FOCUSGUARD_POMODORO_PHASE_END';
+
 const PROCRASTINATION_ALARM_NAME = 'FOCUSGUARD_PROCRASTINATION_30MIN';
 
 const presets = {
@@ -13,6 +20,13 @@ const presets = {
     breakDurationMs: 5 * 60 * 1000
   }
 };
+
+// -------- TEMP TESTING OVERRIDE (remove/disable after Phase B verification) --------
+// If you set `chrome.storage.local.workDurationOverrideMs` to a positive number,
+// the engine preset will use that duration for work sessions.
+const WORK_DURATION_OVERRIDE_KEY = 'workDurationOverrideMs';
+// ----------------------------------------------------------------------------------------
+
 
 function notify(title, body) {
   return chrome.notifications.create({
@@ -24,11 +38,34 @@ function notify(title, body) {
 }
 
 const engine = createPomodoroEngine({
+
   presets,
-  onSessionCompleted: ({ completedPhase }) => {
+  onSessionCompleted: async ({ completedPhase, nextPhase }) => {
     if (completedPhase === 'work') {
+
       notify('When your work session is complete, take a break.', 'FocusGuard');
+
+      // Phase B: create a history entry for completed work sessions.
+      // Notes are Phase C, so initialize to empty.
+      const counter = await getNextPomodoroHistoryCounter();
+
+      // Best-effort duration: we don’t currently persist per-session duration in the engine snapshot.
+      // For Phase B we store `durationMs` as the preset work duration captured at entry creation time.
+      // This is stable and doesn’t affect timer behavior.
+      const workDurationMs = engineState?.workDurationMs ?? presets.default.workDurationMs;
+
+      const completedAt = Date.now();
+      const entry = {
+        id: String(counter),
+        name: `Pomodoro #${counter}`,
+        completedAt,
+        durationMs: workDurationMs,
+        notes: ''
+      };
+
+      await appendPomodoroHistoryEntry(entry, { maxEntries: 15 });
     }
+
     if (completedPhase === 'break') {
       notify('Break finished. Time to focus again.', 'FocusGuard');
     }
@@ -37,15 +74,20 @@ const engine = createPomodoroEngine({
     if (engineState.running) {
       scheduleNext();
     }
+
+    // Ensure popup sees updated history.
+    broadcastState();
   },
   now: () => Date.now()
 });
+
 
 const procrastinationEngine = createProcrastinationEngine({
   now: () => Date.now()
 });
 
-let engineState = { running: false };
+let engineState = { running: false, workDurationMs: presets.default.workDurationMs };
+
 
 // Procrastination monitoring state (in-memory)
 let procrastinationState = {
@@ -154,19 +196,29 @@ function clearTimerAlarms() {
   chrome.alarms.clear(ALARM_NAME);
 }
 
-function broadcastState() {
+async function broadcastState() {
   // Popup may not be open; avoid hard failures.
   const pomodoro = engine.getSnapshot();
   const procrastination = procrastinationEngine.getSnapshot();
+
+  let history = [];
+  try {
+    history = await getPomodoroHistory();
+    history.sort(getPomodoroHistoryEntrySortNewestFirst);
+  } catch {
+    history = [];
+  }
 
   chrome.runtime.sendMessage({
     type: MESSAGE_TYPES.BG_TO_UI_STATE,
     state: {
       pomodoro,
-      procrastination
+      procrastination,
+      history
     }
   }).catch(() => {});
 }
+
 
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -271,7 +323,8 @@ async function syncProcrastinationWithActiveTab() {
   if (url) maybeStartProcrastinationTrackingForUrl(url);
 }
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
+
   if (!message || !message.type) return;
 
   if (message.type === MESSAGE_TYPES.UI_TO_BG_GET_STATE) {
@@ -281,12 +334,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === MESSAGE_TYPES.UI_TO_BG_START) {
     clearTimerAlarms();
-    engine.start();
+
+    // TEMP override for testing work session duration only (Phase B).
+    // Setting workDurationOverrideMs to a small positive number makes the next work session complete faster.
+    // Disable by deleting the key or setting it to 0.
+    try {
+      const ovrRes = await chrome.storage.local.get({ [WORK_DURATION_OVERRIDE_KEY]: 0 });
+      const overrideMs = Number(ovrRes[WORK_DURATION_OVERRIDE_KEY]);
+      if (overrideMs > 0) {
+        engine.setPreset('default');
+        presets.default.workDurationMs = overrideMs;
+      }
+    } catch {
+      // ignore override failures
+    }
+
+    const snap = engine.start();
     engineState.running = true;
+    engineState.workDurationMs = snap?.remainingMs ?? presets.default.workDurationMs;
     scheduleNext();
     broadcastState();
     sendResponse?.({ ok: true });
   }
+
+
 
 
   if (message.type === MESSAGE_TYPES.UI_TO_BG_PAUSE) {
@@ -297,6 +368,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse?.({ ok: true, res });
   }
 
+
   if (message.type === MESSAGE_TYPES.UI_TO_BG_RESET) {
     engine.reset();
     engineState.running = false;
@@ -304,6 +376,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     broadcastState();
     sendResponse?.({ ok: true });
   }
+
 
   if (message.type === MESSAGE_TYPES.UI_TO_BG_SET_PRESET) {
     engine.setPreset(message.presetId);
