@@ -80,3 +80,14 @@ export async function updateEntryName(id, name) {
   return updated;
 }
 
+export async function updateEntryNotes(id, notes) {
+  const history = await getPomodoroHistory();
+  const targetId = String(id);
+  const nextNotes = typeof notes === 'string' ? notes : String(notes ?? '');
+
+  const updated = history.map((e) => (String(e.id) === targetId ? { ...e, notes: nextNotes } : e));
+  await chrome.storage.local.set({ [POMODORO_HISTORY_KEY]: updated });
+  return updated;
+}
+
+

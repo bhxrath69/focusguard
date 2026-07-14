@@ -238,6 +238,47 @@ body::before {
   overflow: auto;
 }
 
+.history-notes-row {
+  margin-top: 8px;
+}
+
+.history-notes-counter {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 6px;
+  font-size: 10px;
+  color: rgba(255, 30, 78, 0.7);
+}
+
+.history-notes-counter strong {
+  color: rgba(255, 30, 78, 0.95);
+  font-weight: 700;
+}
+
+.history-notes-textarea {
+  width: 100%;
+  min-height: 70px;
+  max-height: 120px;
+  resize: vertical;
+  padding: 8px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 30, 78, 0.55);
+  background: rgba(0, 0, 0, 0.35);
+  color: rgba(255, 30, 78, 0.95);
+  outline: none;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  line-height: 1.35;
+}
+
+.history-notes-textarea:focus {
+  border-color: rgba(51, 246, 255, 0.55);
+  box-shadow: 0 0 0 3px rgba(51, 246, 255, 0.12);
+}
+
+
 .history-label {
   font-size: 11px;
   letter-spacing: 0.08em;

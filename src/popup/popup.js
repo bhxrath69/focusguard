@@ -208,6 +208,15 @@ const historyListEl = document.getElementById('historyList');
 let expandedHistoryCardId = null;
 let latestHistory = [];
 
+// Notes UI state for the currently-expanded card.
+let notesDebounceTimerId = null;
+let notesTextareaEl = null;
+let notesWordCounterEl = null;
+let notesExpandedEntryId = null;
+let notesLastSavedValue = '';
+let notesPendingValue = '';
+
+
 function escapeHtml(s) {
   return String(s ?? '')
     .replaceAll('&', '&amp;')
@@ -218,10 +227,61 @@ function escapeHtml(s) {
 }
 
 
+function countWordsWhitespaceSeparated(text) {
+  const t = String(text ?? '').trim();
+  if (!t) return 0;
+  return t.split(/\s+/).filter(Boolean).length;
+}
+
+function enforceNotes200WordMax(text) {
+  // Truncate to 200 words at a boundary.
+  const s = String(text ?? '');
+  const words = s.trim() ? s.trim().split(/\s+/).filter(Boolean) : [];
+  if (words.length <= 200) return s;
+  return words.slice(0, 200).join(' ');
+}
+
+function getNotesWordCount(text) {
+  return countWordsWhitespaceSeparated(text);
+}
+
+
+
+
+async function flushNotesNow({ reason } = {}) {
+  if (!notesExpandedEntryId) return;
+  if (!notesTextareaEl) return;
+
+  if (notesDebounceTimerId != null) {
+    clearTimeout(notesDebounceTimerId);
+    notesDebounceTimerId = null;
+  }
+
+  const current = String(notesTextareaEl.value ?? '');
+  const normalized = enforceNotes200WordMax(current);
+
+  if (normalized !== current) {
+    notesTextareaEl.value = normalized;
+  }
+
+  notesPendingValue = normalized;
+
+  // Avoid unnecessary storage write if nothing changed since last saved.
+  if (normalized === notesLastSavedValue) return;
+
+  const { updateEntryNotes } = await import('../shared/historyStorage.js');
+  await updateEntryNotes(notesExpandedEntryId, normalized);
+  notesLastSavedValue = normalized;
+
+  // eslint-disable-next-line no-unused-vars
+  void reason;
+}
+
 function renderHistory(history) {
   latestHistory = Array.isArray(history) ? history : [];
 
   if (!historyListEl) return;
+
 
   historyListEl.innerHTML = '';
 
@@ -255,12 +315,20 @@ function renderHistory(history) {
     header.appendChild(titleSpan);
     header.appendChild(chevron);
 
-    header.addEventListener('click', () => {
-      // Toggle expand/collapse. Phase B rename should not be debounced; just save immediately.
+    header.addEventListener('click', async () => {
+      // Toggle expand/collapse.
+      // Flush any pending notes for the previously-expanded card immediately
+      // so switching cards never loses debounced input.
       const nextExpanded = expandedHistoryCardId === id ? null : id;
+
+      if (expandedHistoryCardId != null && expandedHistoryCardId !== nextExpanded) {
+        await flushNotesNow({ reason: 'switch-card' });
+      }
+
       expandedHistoryCardId = nextExpanded;
       renderHistory(latestHistory);
     });
+
 
     card.appendChild(header);
 
@@ -297,12 +365,104 @@ function renderHistory(history) {
       hint.textContent = 'Saved immediately.';
       body.appendChild(hint);
 
+      // ---- Phase C: Notes textarea + word counter ----
+      const notesRow = document.createElement('div');
+      notesRow.className = 'history-notes-row';
+
+      const counterRow = document.createElement('div');
+      counterRow.className = 'history-notes-counter';
+
+      const counterLeft = document.createElement('div');
+      counterLeft.textContent = 'Notes';
+
+      const counterRight = document.createElement('div');
+      counterRight.textContent = `0 / 200 words`;
+
+      counterRow.appendChild(counterLeft);
+      counterRow.appendChild(counterRight);
+
+      const textarea = document.createElement('textarea');
+      textarea.className = 'history-notes-textarea';
+      textarea.placeholder = 'Write notes for this work session (max 200 words).';
+
+      // Prefill saved notes.
+      const entryNotes = typeof entry?.notes === 'string' ? entry.notes : '';
+      const normalizedEntryNotes = enforceNotes200WordMax(entryNotes);
+      textarea.value = normalizedEntryNotes;
+      notesLastSavedValue = normalizedEntryNotes;
+      notesPendingValue = normalizedEntryNotes;
+
+      // Update globals for autosave/flush.
+      notesTextareaEl = textarea;
+      notesWordCounterEl = counterRight;
+      notesExpandedEntryId = id;
+
+      const updateCounterUI = () => {
+        const wc = countWordsWhitespaceSeparated(textarea.value);
+        const limited = Math.min(wc, 200);
+        if (notesWordCounterEl) notesWordCounterEl.textContent = `${limited} / 200 words`;
+        return wc;
+      };
+
+      updateCounterUI();
+
+      const scheduleAutosave = () => {
+        if (notesDebounceTimerId != null) clearTimeout(notesDebounceTimerId);
+        notesDebounceTimerId = setTimeout(() => {
+          void flushNotesNow({ reason: 'debounce' });
+        }, 500);
+      };
+
+      // Block further typing past 200 words (while allowing backspace/delete editing).
+      // Uses `beforeinput` so we can cancel the specific keystroke that would add a new word.
+      textarea.addEventListener('beforeinput', (e) => {
+        // Only gate text insertion (not deletions).
+        if (!e?.inputType) return;
+        const inputType = e.inputType;
+
+        const textInsertionTypes = new Set([
+          'insertText',
+          'insertCompositionText',
+          'insertFromPaste',
+          'insertReplacementText'
+        ]);
+
+        if (!textInsertionTypes.has(inputType)) return;
+
+        const currentText = textarea.value;
+        const currentWordCount = countWordsWhitespaceSeparated(currentText);
+        if (currentWordCount >= 200) {
+          e.preventDefault();
+          return;
+        }
+      });
+
+      textarea.addEventListener('input', () => {
+        // Safety net: truncate if something slipped past (e.g. paste).
+        const enforced = enforceNotes200WordMax(textarea.value);
+        if (enforced !== textarea.value) textarea.value = enforced;
+        notesPendingValue = textarea.value;
+        updateCounterUI();
+        scheduleAutosave();
+      });
+
+      textarea.addEventListener('blur', () => {
+        void flushNotesNow({ reason: 'blur' });
+      });
+
+
+      notesRow.appendChild(counterRow);
+      notesRow.appendChild(textarea);
+
+      body.appendChild(notesRow);
       card.appendChild(body);
     }
 
     historyListEl.appendChild(card);
   }
 }
+
+
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg?.type !== MESSAGE_TYPES.BG_TO_UI_STATE) return;
